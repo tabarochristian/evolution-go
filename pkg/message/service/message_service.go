@@ -32,6 +32,7 @@ type MessageService interface {
 	GetMessageStatus(data *MessageStatusStruct, instance *instance_model.Instance) (*message_model.Message, string, error)
 	DeleteMessageEveryone(data *MessageStruct, instance *instance_model.Instance) (string, string, error)
 	EditMessage(data *EditMessageStruct, instance *instance_model.Instance) (string, string, error)
+	GetOrderDetails(data *OrderDetailsStruct, instance *instance_model.Instance) (*types.OrderDetails, error)
 }
 
 type messageService struct {
@@ -86,6 +87,15 @@ type EditMessageStruct struct {
 	Chat      string `json:"chat"`
 	Message   string `json:"message"`
 	MessageID string `json:"messageId"`
+}
+
+// OrderDetailsStruct: OrderID and Token come straight off the orderMessage a
+// webhook consumer already received (WAWebProtobufsE2E.OrderMessage) - a
+// native WhatsApp catalog "cart" checkout never carries its line items
+// inline, only this reference, which must be resolved with a second call.
+type OrderDetailsStruct struct {
+	OrderID string `json:"orderId"`
+	Token   string `json:"token"`
 }
 
 type MessageSendStruct struct {
@@ -523,6 +533,21 @@ func (m *messageService) EditMessage(data *EditMessageStruct, instance *instance
 	}
 
 	return resp.ID, resp.Timestamp.String(), nil
+}
+
+func (m *messageService) GetOrderDetails(data *OrderDetailsStruct, instance *instance_model.Instance) (*types.OrderDetails, error) {
+	client, err := m.ensureClientConnected(instance.Id)
+	if err != nil {
+		return nil, err
+	}
+
+	details, err := client.GetOrderDetails(context.Background(), data.OrderID, data.Token)
+	if err != nil {
+		m.loggerWrapper.GetLogger(instance.Id).LogError("[%s] error fetching order details: %v", instance.Id, err)
+		return nil, err
+	}
+
+	return details, nil
 }
 
 func NewMessageService(

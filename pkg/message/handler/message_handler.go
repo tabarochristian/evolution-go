@@ -17,6 +17,7 @@ type MessageHandler interface {
 	GetMessageStatus(ctx *gin.Context)
 	DeleteMessageEveryone(ctx *gin.Context)
 	EditMessage(ctx *gin.Context)
+	GetOrderDetails(ctx *gin.Context)
 }
 
 type messageHandler struct {
@@ -411,6 +412,52 @@ func (m *messageHandler) EditMessage(ctx *gin.Context) {
 	}
 
 	ctx.JSON(http.StatusOK, gin.H{"message": "success", "data": responseData})
+}
+
+// GetOrderDetails resolve a WhatsApp catalog order's line items
+// @Summary Get order details
+// @Description Resolve the full line items (product id/name/price/quantity) of a WhatsApp catalog "cart" checkout order, given the orderId+token from the orderMessage a webhook consumer already received. The webhook payload alone never carries productItems - this fetches them.
+// @Tags Message
+// @Accept json
+// @Produce json
+// @Param message body message_service.OrderDetailsStruct true "Resolve order details by orderId and token"
+// @Success 200 {object} gin.H "success"
+// @Failure 400 {object} gin.H "Error on validation"
+// @Failure 500 {object} gin.H "Internal server error"
+// @Router /message/order [post]
+func (m *messageHandler) GetOrderDetails(ctx *gin.Context) {
+	getInstance := ctx.MustGet("instance")
+
+	instance, ok := getInstance.(*instance_model.Instance)
+	if !ok {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "instance not found"})
+		return
+	}
+
+	var data *message_service.OrderDetailsStruct
+	err := ctx.ShouldBindBodyWithJSON(&data)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if data.OrderID == "" {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "orderId is required"})
+		return
+	}
+
+	if data.Token == "" {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "token is required"})
+		return
+	}
+
+	details, err := m.messageService.GetOrderDetails(data, instance)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{"message": "success", "data": gin.H{"result": details}})
 }
 
 func NewMessageHandler(
