@@ -157,7 +157,6 @@ func (r *Routes) AssignRoutes(eng *gin.Engine) {
 			routes.POST("/delete", r.jidValidationMiddleware.ValidateNumberField(), r.messageHandler.DeleteMessageEveryone)
 			routes.POST("/edit", r.jidValidationMiddleware.ValidateNumberField(), r.messageHandler.EditMessage) // TODO: edit MediaMessage too
 			routes.POST("/order", r.messageHandler.GetOrderDetails)
-			routes.GET("/catalog", r.messageHandler.GetCatalog)
 		}
 	}
 	routes = eng.Group("/chat")

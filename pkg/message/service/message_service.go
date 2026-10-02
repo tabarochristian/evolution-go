@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -18,7 +17,6 @@ import (
 	whatsmeow_service "github.com/evolution-foundation/evolution-go/pkg/whatsmeow/service"
 	"github.com/vincent-petithory/dataurl"
 	"go.mau.fi/whatsmeow"
-	waBinary "go.mau.fi/whatsmeow/binary"
 	"go.mau.fi/whatsmeow/proto/waCommon"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
@@ -35,7 +33,6 @@ type MessageService interface {
 	DeleteMessageEveryone(data *MessageStruct, instance *instance_model.Instance) (string, string, error)
 	EditMessage(data *EditMessageStruct, instance *instance_model.Instance) (string, string, error)
 	GetOrderDetails(data *OrderDetailsStruct, instance *instance_model.Instance) (*types.OrderDetails, error)
-	GetCatalog(instance *instance_model.Instance) ([]CatalogProductStruct, error)
 }
 
 type messageService struct {
@@ -99,20 +96,6 @@ type EditMessageStruct struct {
 type OrderDetailsStruct struct {
 	OrderID string `json:"orderId"`
 	Token   string `json:"token"`
-}
-
-// CatalogProductStruct is one item of the connected account's own WhatsApp
-// catalog. RetailerID is the merchant-set SKU/"Content ID" shown on
-// WhatsApp Web - GetOrderDetails never carries it (confirmed against a
-// live order payload: its product nodes only have id/name/price/currency/
-// image), since that query resolves an order's line items, not a catalog
-// item's own record. This is the only way to read it back.
-type CatalogProductStruct struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	RetailerID string `json:"retailerId"`
-	Price      int64  `json:"price"`
-	Currency   string `json:"currency"`
 }
 
 type MessageSendStruct struct {
@@ -565,98 +548,6 @@ func (m *messageService) GetOrderDetails(data *OrderDetailsStruct, instance *ins
 	}
 
 	return details, nil
-}
-
-// catalogChildString reads a child element's text content, mirroring the
-// private helper whatsmeow's own business.go uses for the same purpose -
-// that one isn't exported, so this is a local copy.
-func catalogChildString(node waBinary.Node, tag string) string {
-	child, ok := node.GetOptionalChildByTag(tag)
-	if !ok {
-		return ""
-	}
-	content, _ := child.Content.([]byte)
-	return string(content)
-}
-
-// GetCatalog fetches every product in the connected account's own WhatsApp
-// catalog. whatsmeow has no public method for this - the IQ it sends
-// ("w:biz:catalog", documented by the WhiskeySockets/Baileys JS library's
-// own getCatalog implementation, which talks to the same WhatsApp
-// multidevice protocol) isn't one whatsmeow wraps - so this is built
-// directly on whatsmeow's own DangerousInternalClient escape hatch,
-// following the exact same build-node/send/parse-response shape as
-// whatsmeow's own GetOrderDetails (business.go).
-func (m *messageService) GetCatalog(instance *instance_model.Instance) ([]CatalogProductStruct, error) {
-	client, err := m.ensureClientConnected(instance.Id)
-	if err != nil {
-		return nil, err
-	}
-
-	ownJID := client.Store.ID.ToNonAD().String()
-	internals := client.DangerousInternals()
-
-	var products []CatalogProductStruct
-	cursor := ""
-	// WhatsApp's own paging ("after" cursor) should exhaust well before
-	// this - the cap only guards against an unexpected cursor loop.
-	for page := 0; page < 50; page++ {
-		queryParams := []waBinary.Node{
-			{Tag: "limit", Content: []byte("100")},
-			{Tag: "width", Content: []byte("100")},
-			{Tag: "height", Content: []byte("100")},
-		}
-		if cursor != "" {
-			queryParams = append(queryParams, waBinary.Node{Tag: "after", Content: []byte(cursor)})
-		}
-
-		resp, err := internals.SendIQ(context.Background(), whatsmeow.DangerousInfoQuery{
-			Namespace: "w:biz:catalog",
-			Type:      whatsmeow.DangerousInfoQueryType("get"),
-			To:        types.ServerJID,
-			Content: []waBinary.Node{
-				{
-					Tag: "product_catalog",
-					Attrs: waBinary.Attrs{
-						"jid":               ownJID,
-						"allow_shop_source": "true",
-					},
-					Content: queryParams,
-				},
-			},
-		})
-		if err != nil {
-			m.loggerWrapper.GetLogger(instance.Id).LogError("[%s] error fetching catalog: %v", instance.Id, err)
-			return nil, err
-		}
-
-		catalogNode, ok := resp.GetOptionalChildByTag("product_catalog")
-		if !ok {
-			break
-		}
-		for _, productNode := range catalogNode.GetChildrenByTag("product") {
-			price, _ := strconv.ParseInt(catalogChildString(productNode, "price"), 10, 64)
-			products = append(products, CatalogProductStruct{
-				ID:         catalogChildString(productNode, "id"),
-				Name:       catalogChildString(productNode, "name"),
-				RetailerID: catalogChildString(productNode, "retailer_id"),
-				Price:      price,
-				Currency:   catalogChildString(productNode, "currency"),
-			})
-		}
-
-		pagingNode, ok := catalogNode.GetOptionalChildByTag("paging")
-		if !ok {
-			break
-		}
-		next := catalogChildString(pagingNode, "after")
-		if next == "" || next == cursor {
-			break
-		}
-		cursor = next
-	}
-
-	return products, nil
 }
 
 func NewMessageService(

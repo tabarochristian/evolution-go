@@ -18,7 +18,6 @@ type MessageHandler interface {
 	DeleteMessageEveryone(ctx *gin.Context)
 	EditMessage(ctx *gin.Context)
 	GetOrderDetails(ctx *gin.Context)
-	GetCatalog(ctx *gin.Context)
 }
 
 type messageHandler struct {
@@ -459,32 +458,6 @@ func (m *messageHandler) GetOrderDetails(ctx *gin.Context) {
 	}
 
 	ctx.JSON(http.StatusOK, gin.H{"message": "success", "data": gin.H{"result": details}})
-}
-
-// GetCatalog list every product in the connected account's own WhatsApp catalog
-// @Summary Get catalog
-// @Description List every product in the connected account's own WhatsApp catalog, including each one's merchant-set retailerId (the SKU WhatsApp Web itself displays) - the one field GetOrderDetails never carries.
-// @Tags Message
-// @Produce json
-// @Success 200 {object} gin.H "success"
-// @Failure 500 {object} gin.H "Internal server error"
-// @Router /message/catalog [get]
-func (m *messageHandler) GetCatalog(ctx *gin.Context) {
-	getInstance := ctx.MustGet("instance")
-
-	instance, ok := getInstance.(*instance_model.Instance)
-	if !ok {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "instance not found"})
-		return
-	}
-
-	products, err := m.messageService.GetCatalog(instance)
-	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	ctx.JSON(http.StatusOK, gin.H{"message": "success", "data": gin.H{"result": products}})
 }
 
 func NewMessageHandler(
