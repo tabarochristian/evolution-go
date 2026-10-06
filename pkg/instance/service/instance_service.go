@@ -230,7 +230,14 @@ func (i instances) Connect(data *ConnectStruct, instance *instance_model.Instanc
 	eventString := strings.Join(subscribedEvents, ",")
 
 	instance.Events = eventString
+	// A connect call without a webhookUrl (e.g. the manager UI's Connect
+	// button) used to blank the stored webhook, silently stopping every
+	// delivery. Fall back to the deployment's WEBHOOK_URL so a reconnect
+	// never loses it; an explicit URL in the request still wins.
 	instance.Webhook = data.WebhookUrl
+	if instance.Webhook == "" {
+		instance.Webhook = i.config.WebhookUrl
+	}
 	instance.RabbitmqEnable = data.RabbitmqEnable
 	instance.NatsEnable = data.NatsEnable
 	instance.WebSocketEnable = data.WebSocketEnable
