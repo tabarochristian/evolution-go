@@ -96,6 +96,10 @@ type EditMessageStruct struct {
 type OrderDetailsStruct struct {
 	OrderID string `json:"orderId"`
 	Token   string `json:"token"`
+	// SellerJID is the orderMessage's sellerJID. Optional: the current order
+	// query needs it, and when it is missing this account's own JIDs are
+	// tried instead.
+	SellerJID string `json:"sellerJid,omitempty"`
 }
 
 type MessageSendStruct struct {
@@ -540,10 +544,39 @@ func (m *messageService) GetOrderDetails(data *OrderDetailsStruct, instance *ins
 	if err != nil {
 		return nil, err
 	}
+	logger := m.loggerWrapper.GetLogger(instance.Id)
+	ctx := context.Background()
 
-	details, err := client.GetOrderDetails(context.Background(), data.OrderID, data.Token)
+	// Current protocol first: the persisted GraphQL order query over MEX (see
+	// order_mex.go). The legacy IQ below is kept as a fallback, since it is
+	// what whatsmeow ships and WhatsApp may still serve it to some accounts.
+	var own []types.JID
+	if client.Store != nil {
+		if client.Store.ID != nil {
+			own = append(own, *client.Store.ID)
+		}
+		own = append(own, client.Store.LID)
+	}
+	for _, seller := range sellerJIDCandidates(data.SellerJID, own...) {
+		raw, mexErr := client.DangerousInternals().SendMexIQ(
+			ctx, orderMexQueryID(), orderMexVariables(seller, data.OrderID, data.Token),
+		)
+		if mexErr != nil {
+			logger.LogWarn("[%s] order lookup via mex failed (seller %s): %v", instance.Id, seller, mexErr)
+			continue
+		}
+		details, parseErr := parseOrderMexData(data.OrderID, raw)
+		if parseErr != nil {
+			logger.LogWarn("[%s] order lookup via mex returned an unusable reply (seller %s): %v", instance.Id, seller, parseErr)
+			continue
+		}
+		logger.LogInfo("[%s] order %s resolved via mex (seller %s): %d product(s)", instance.Id, data.OrderID, seller, len(details.Products))
+		return details, nil
+	}
+
+	details, err := client.GetOrderDetails(ctx, data.OrderID, data.Token)
 	if err != nil {
-		m.loggerWrapper.GetLogger(instance.Id).LogError("[%s] error fetching order details: %v", instance.Id, err)
+		logger.LogError("[%s] error fetching order details: %v", instance.Id, err)
 		return nil, err
 	}
 
