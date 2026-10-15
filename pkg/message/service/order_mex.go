@@ -2,6 +2,7 @@ package message_service
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -31,17 +32,49 @@ func orderMexQueryID() string {
 	return defaultOrderMexQueryID
 }
 
-func orderMexVariables(sellerJID, orderID, token string) map[string]any {
-	return map[string]any{
-		"request": map[string]any{
-			"order": map[string]any{
-				"jid":              sellerJID,
-				"token":            map[string]string{"sensitive_string_value": token},
-				"id":               orderID,
-				"image_dimensions": map[string]int{"height": 100, "width": 100},
-			},
-		},
+// orderMexVariables builds the query's variables. An empty sellerJID omits the
+// "jid" field (the spec lists it as not always present); stringDims sends the
+// image dimensions as strings, which is how WhatsApp Web sends the catalog
+// queries' numbers.
+func orderMexVariables(sellerJID, orderID, token string, stringDims bool) map[string]any {
+	var dims any = map[string]int{"height": 100, "width": 100}
+	if stringDims {
+		dims = map[string]string{"height": "100", "width": "100"}
 	}
+	order := map[string]any{
+		"token":            map[string]string{"sensitive_string_value": token},
+		"id":               orderID,
+		"image_dimensions": dims,
+	}
+	if sellerJID != "" {
+		order["jid"] = sellerJID
+	}
+	return map[string]any{"request": map[string]any{"order": order}}
+}
+
+// orderMexAttempt is one variation of the order request. WhatsApp answers a
+// request it dislikes with a bare "400 Bad Request" and no detail, so the
+// gateway tries a few plausible variations in turn and logs each outcome
+// (label + error code); the first success wins and its label is logged.
+type orderMexAttempt struct {
+	label      string
+	seller     string
+	stringDims bool
+}
+
+func orderMexAttempts(fromMessage string, own ...types.JID) []orderMexAttempt {
+	var out []orderMexAttempt
+	sellers := sellerJIDCandidates(fromMessage, own...)
+	for _, s := range sellers {
+		out = append(out, orderMexAttempt{label: "jid=" + s, seller: s})
+	}
+	out = append(out, orderMexAttempt{label: "jid omitted"})
+	if len(sellers) > 0 {
+		out = append(out, orderMexAttempt{
+			label: "jid=" + sellers[0] + " with string image dimensions", seller: sellers[0], stringDims: true,
+		})
+	}
+	return out
 }
 
 // flexInt reads a GraphQL number that arrives either as a JSON number or as a
@@ -166,4 +199,20 @@ func sellerJIDCandidates(fromMessage string, own ...types.JID) []string {
 		}
 	}
 	return out
+}
+
+// describeGraphQLError spells out every field of a GraphQL error WhatsApp
+// returned (message, error_code, retryable, severity, path) - the bare
+// error string only shows the message.
+func describeGraphQLError(err error) string {
+	var gqlErrs types.GraphQLErrors
+	if errors.As(err, &gqlErrs) {
+		parts := make([]string, 0, len(gqlErrs))
+		for _, e := range gqlErrs {
+			parts = append(parts, fmt.Sprintf("%q code=%d retryable=%v severity=%s path=%v",
+				e.Message, e.Extensions.ErrorCode, e.Extensions.IsRetryable, e.Extensions.Severity, e.Path))
+		}
+		return strings.Join(parts, "; ")
+	}
+	return err.Error()
 }

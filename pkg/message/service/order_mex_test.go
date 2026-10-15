@@ -64,7 +64,7 @@ func TestParseOrderMexDataRejectsEmptyReplies(t *testing.T) {
 }
 
 func TestOrderMexVariablesShape(t *testing.T) {
-	b, _ := json.Marshal(orderMexVariables("123@lid", "9001", "tok"))
+	b, _ := json.Marshal(orderMexVariables("123@lid", "9001", "tok", false))
 	want := `{"request":{"order":{"id":"9001","image_dimensions":{"height":100,"width":100},"jid":"123@lid","token":{"sensitive_string_value":"tok"}}}}`
 	if string(b) != want {
 		t.Fatalf("variables mismatch:\n got %s\nwant %s", b, want)
@@ -92,5 +92,42 @@ func TestOrderMexQueryIDOverride(t *testing.T) {
 	t.Setenv("WA_MEX_ORDER_QUERY_ID", " 555 ")
 	if orderMexQueryID() != "555" {
 		t.Fatal("override not used")
+	}
+}
+
+func TestOrderMexVariablesVariants(t *testing.T) {
+	noJID, _ := json.Marshal(orderMexVariables("", "9001", "tok", false))
+	if string(noJID) != `{"request":{"order":{"id":"9001","image_dimensions":{"height":100,"width":100},"token":{"sensitive_string_value":"tok"}}}}` {
+		t.Fatalf("jid should be omitted: %s", noJID)
+	}
+	strDims, _ := json.Marshal(orderMexVariables("1@lid", "9001", "tok", true))
+	if string(strDims) != `{"request":{"order":{"id":"9001","image_dimensions":{"height":"100","width":"100"},"jid":"1@lid","token":{"sensitive_string_value":"tok"}}}}` {
+		t.Fatalf("dimensions should be strings: %s", strDims)
+	}
+}
+
+func TestOrderMexAttemptsOrder(t *testing.T) {
+	pn := types.NewADJID("243841363015", 0, 4)
+	got := orderMexAttempts("199042273427633@lid", pn)
+	labels := make([]string, len(got))
+	for i, a := range got {
+		labels[i] = a.label
+	}
+	want := []string{
+		"jid=199042273427633@lid",
+		"jid=243841363015@s.whatsapp.net",
+		"jid omitted",
+		"jid=199042273427633@lid with string image dimensions",
+	}
+	if len(labels) != len(want) {
+		t.Fatalf("got %v want %v", labels, want)
+	}
+	for i := range want {
+		if labels[i] != want[i] {
+			t.Fatalf("attempt %d: got %q want %q", i, labels[i], want[i])
+		}
+	}
+	if only := orderMexAttempts("", types.EmptyJID); len(only) != 1 || only[0].label != "jid omitted" {
+		t.Fatalf("with no candidates only the omitted attempt remains, got %+v", only)
 	}
 }

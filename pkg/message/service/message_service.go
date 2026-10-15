@@ -557,20 +557,21 @@ func (m *messageService) GetOrderDetails(data *OrderDetailsStruct, instance *ins
 		}
 		own = append(own, client.Store.LID)
 	}
-	for _, seller := range sellerJIDCandidates(data.SellerJID, own...) {
+	for _, attempt := range orderMexAttempts(data.SellerJID, own...) {
 		raw, mexErr := client.DangerousInternals().SendMexIQ(
-			ctx, orderMexQueryID(), orderMexVariables(seller, data.OrderID, data.Token),
+			ctx, orderMexQueryID(),
+			orderMexVariables(attempt.seller, data.OrderID, data.Token, attempt.stringDims),
 		)
 		if mexErr != nil {
-			logger.LogWarn("[%s] order lookup via mex failed (seller %s): %v", instance.Id, seller, mexErr)
+			logger.LogWarn("[%s] order lookup via mex failed (%s): %s", instance.Id, attempt.label, describeGraphQLError(mexErr))
 			continue
 		}
 		details, parseErr := parseOrderMexData(data.OrderID, raw)
 		if parseErr != nil {
-			logger.LogWarn("[%s] order lookup via mex returned an unusable reply (seller %s): %v", instance.Id, seller, parseErr)
+			logger.LogWarn("[%s] order lookup via mex returned an unusable reply (%s): %v", instance.Id, attempt.label, parseErr)
 			continue
 		}
-		logger.LogInfo("[%s] order %s resolved via mex (seller %s): %d product(s)", instance.Id, data.OrderID, seller, len(details.Products))
+		logger.LogInfo("[%s] order %s resolved via mex (%s): %d product(s)", instance.Id, data.OrderID, attempt.label, len(details.Products))
 		return details, nil
 	}
 
